@@ -4,7 +4,6 @@ import pdfplumber
 import re
 import plotly.express as px
 import plotly.graph_objects as go
-from prophet import Prophet
 from datetime import datetime, timedelta
 import numpy as np
 import warnings
@@ -238,7 +237,7 @@ def extract_financial_data(pdf_file, company_type: str = "insurance") -> Dict[st
              "Other KPIs": { # Airport Specific
                  "Total Passengers": r"Total\\s+Passengers\\s*\\n*.*?([\\d,]+)\\s*\\n*Total\\s+Aircraft",
                  "Aircraft Movements": r"Aircraft\\s+Movements\\s*\\n*.*?([\\d,]+)\\s*\\n*Total\\s+Passengers",
-                 "Cargo Handled (kg)": r"Cargo\\s+of\\s+([\\d,]+)\\s+kgs",
+                 "Cargo Handled (kg)": r"Cargo\\s+of\s+([\\d,]+)\\s+kgs",
                  "Mail Handled (kg)": r"Mail\\s+handled\\s+was\\s+([\\d,]+)\\s+kgs",
             }
     }
@@ -299,24 +298,24 @@ def extract_financial_data(pdf_file, company_type: str = "insurance") -> Dict[st
 # 🧠 AI ANALYSIS & FORECASTING (Core AI Layer)
 # =============================================
 @st.cache_data(show_spinner="🔮 Running AI forecasts...", ttl=600)
-def create_prophet_forecast(historical_data: Dict[str, float], periods: int = 3, freq: str = 'Y') -> Tuple[Optional[pd.DataFrame], Optional[Prophet]]:
+def create_prophet_forecast(historical_data: Dict[str, float], periods: int = 3, freq: str = 'Y') -> Tuple[Optional[pd.DataFrame], Optional[Any]]:
     numeric_data = {k: v for k, v in historical_data.items() if isinstance(v, (int, float))}
-    if not numeric_data or len(numeric_data) < 2: st.warning("Insufficient historical data for Prophet forecasting."); return None, None
+    if not numeric_data or len(numeric_data) < 2: 
+        st.warning("Insufficient historical data for forecasting.")
+        return None, None
+    
     try:
         df = pd.DataFrame(list(numeric_data.items()), columns=['ds', 'y'])
         if all(re.match(r"^\d{4}$", str(d)) for d in df['ds']):
-             df['ds'] = pd.to_datetime(df['ds'].astype(str) + '-12-31')
+            df['ds'] = pd.to_datetime(df['ds'].astype(str) + '-12-31')
         else:
-             df['ds'] = pd.to_datetime(df['ds'])
+            df['ds'] = pd.to_datetime(df['ds'])
 
         df = df.sort_values('ds')
-        model = Prophet(yearly_seasonality='auto', changepoint_prior_scale=0.1)
-        model.fit(df)
-        future = model.make_future_dataframe(periods=periods, freq=freq)
-        forecast = model.predict(future)
-        return forecast, model
+        st.warning("Forecasting features require the 'prophet' package. Install it to enable forecasting.")
+        return None, None
     except Exception as e:
-        st.error(f"Prophet forecasting error: {e}")
+        st.error(f"Forecasting error: {e}")
         return None, None
 
 def generate_ai_insights(data: Dict[str, Any], historical_data: Optional[Dict[str, Dict[str, Any]]] = None) -> List[str]:
@@ -1097,63 +1096,45 @@ def display_segment_map(data: Dict[str, Any]) -> None:
          st.info(f"Segment map visualization is typically applicable for Insurance, Banking, or Technology sectors with defined geographic regions. A bar chart comparison is provided above.")
 
 def display_forecasting_charts(historical_data: Optional[Dict[str, Dict[str, Any]]], data: Dict[str, Any]) -> None:
-    st.markdown("Basic 3-year forecast using Prophet based on available historical data."); st.caption("Note: Uses default Prophet settings. Actual results depend on data quality and model tuning."); st.divider()
-    if not historical_data: st.info("Historical data unavailable for forecasting."); return
-    metadata = data.get("metadata", {}); currency = metadata.get("currency", DEFAULT_CURRENCY); scale = metadata.get("scale", 1); scale = 1 if not isinstance(scale, (int, float)) or scale == 0 else scale
-    scale_desc = "M" if scale == 1_000_000 else "k" if scale == 1000 else ""; y_axis_title_base = f"Value ({currency}{' ' + scale_desc if scale_desc else ''})"
-    valid_metrics = {k: {str(year): val for year, val in v.items() if isinstance(val, (int, float))} for k, v in historical_data.items() if isinstance(v, dict)}; valid_metrics = {k: v for k, v in valid_metrics.items() if len(v) >= 2}
-    if not valid_metrics: st.warning("No metrics with sufficient historical data (>= 2 years) for forecasting."); return
-
-    other_kpis = data.get("Other KPIs", {})
-    for kpi_name, kpi_value in other_kpis.items():
-       if isinstance(kpi_value, (int, float)) and kpi_name not in valid_metrics:
-           hist_kpi = data.get("Historical Data", {}).get(kpi_name, {})
-           if hist_kpi and isinstance(hist_kpi, dict) and len(hist_kpi) >= 1:
-                combined_kpi = {str(year): val for year, val in hist_kpi.items() if isinstance(val, (int, float))}
-                current_year = metadata.get("report_date", "N/A").split("-")[0]
-                if current_year != "N/A" and current_year not in combined_kpi:
-                    combined_kpi[current_year] = kpi_value
-                if len(combined_kpi) >= 2:
-                    valid_metrics[kpi_name] = combined_kpi
-
-    if not valid_metrics:
-        st.warning("No metrics with sufficient historical data (>= 2 years) for forecasting, including KPIs."); return
-
-    metric_to_forecast = st.selectbox("Select metric to forecast", list(valid_metrics.keys()))
-    if metric_to_forecast:
-        hist_values = valid_metrics[metric_to_forecast]; forecast_df, model = create_prophet_forecast(hist_values, periods=3, freq='Y')
-        if forecast_df is not None and model is not None:
-            fig = go.Figure(); hist_df_plot = pd.DataFrame(list(hist_values.items()), columns=['ds', 'y']);
-            if all(re.match(r"^\d{4}$", str(d)) for d in hist_df_plot['ds']):
-                 hist_df_plot['ds'] = pd.to_datetime(hist_df_plot['ds'].astype(str) + '-12-31')
-            else:
-                 hist_df_plot['ds'] = pd.to_datetime(hist_df_plot['ds'])
-            hist_df_plot = hist_df_plot.sort_values('ds'); last_hist_date = hist_df_plot['ds'].max()
-            fig.add_trace(go.Scatter(x=hist_df_plot['ds'], y=hist_df_plot['y'], mode='lines+markers', name='Historical', line=dict(color='#0d6efd', width=2.5), marker=dict(size=6)))
-            forecast_plot_df = forecast_df[forecast_df['ds'] > last_hist_date]
-            fig.add_trace(go.Scatter(x=forecast_plot_df['ds'], y=forecast_plot_df['yhat'], mode='lines', name='Forecast', line=dict(color='#fd7e14', dash='dash', width=2.5)))
-            x_fill = pd.concat([hist_df_plot['ds'].tail(1), forecast_plot_df['ds'], forecast_plot_df['ds'][::-1], hist_df_plot['ds'].tail(1)])
-            y_fill = pd.concat([hist_df_plot['y'].tail(1), forecast_plot_df['yhat_upper'], forecast_plot_df['yhat_lower'][::-1], hist_df_plot['y'].tail(1)])
-            fig.add_trace(go.Scatter(x=x_fill, y=y_fill, fill='toself', fillcolor='rgba(253, 126, 20, 0.2)', line=dict(color='rgba(255,255,255,0)'), hoverinfo="skip", showlegend=False, name='Confidence Interval'))
-            font_color = "#e0e0e0" if st.session_state.theme_mode == "dark" else "#212529"
-            is_kpi_metric = metric_to_forecast in other_kpis
-            current_y_axis_title = metric_to_forecast if is_kpi_metric else y_axis_title_base
-            tick_format = ',.0f'
-            if not is_kpi_metric:
-                 tick_format = ',.0f'
-
-            fig.update_layout(title=f"3-Year Forecast for {metric_to_forecast}", xaxis_title="Date", yaxis_title=current_y_axis_title, hovermode='x unified', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', legend=dict(bgcolor='rgba(0,0,0,0)', font=dict(color=font_color)), font=dict(color=font_color), yaxis_tickformat=tick_format)
-            st.plotly_chart(fig, use_container_width=True)
-            with st.expander("View Forecast Data"):
-                 future_forecast = forecast_plot_df[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]; future_forecast['ds'] = future_forecast['ds'].dt.year
-                 if is_kpi_metric:
-                      for col in ['yhat', 'yhat_lower', 'yhat_upper']: future_forecast[col] = future_forecast[col].apply(lambda x: f"{x:,.0f}")
-                 else:
-                       for col in ['yhat', 'yhat_lower', 'yhat_upper']: future_forecast[col] = future_forecast[col].apply(lambda x: format_currency(x, currency, 1, 1))
-                 st.dataframe(future_forecast.rename(columns={'ds':'Year','yhat':'Forecast','yhat_lower':'Lower Bound','yhat_upper':'Upper Bound'}).set_index('Year'))
-        elif model is None: st.warning(f"Could not generate forecast for {metric_to_forecast} (Insufficient data).")
-        else: st.error(f"An error occurred during forecasting for {metric_to_forecast}.")
-    else: st.info("Please select metric for forecasting.")
+    st.markdown("Basic 3-year forecast based on available historical data.")
+    st.caption("Note: Forecasting features require additional packages. Install 'prophet' for advanced forecasting.")
+    st.divider()
+    
+    st.info("Forecasting features are currently disabled. To enable forecasting:")
+    st.markdown("""
+    1. Add `prophet` to your `requirements.txt`:
+    ```
+    prophet==1.1.5
+    holidays==0.36
+    convertdate==2.4.0
+    lunarcalendar==0.0.9
+    pystan==2.19.1.1
+    ```
+    2. Uncomment the Prophet import in app.py
+    3. Redeploy the application
+    """)
+    
+    # Simple alternative: show historical trend instead of forecast
+    if historical_data:
+        st.subheader("Historical Data Available")
+        valid_metrics = {k: {str(year): val for year, val in v.items() if isinstance(val, (int, float))} 
+                        for k, v in historical_data.items() if isinstance(v, dict)}
+        valid_metrics = {k: v for k, v in valid_metrics.items() if len(v) >= 2}
+        
+        if valid_metrics:
+            metric_to_view = st.selectbox("Select metric to view historical trend", list(valid_metrics.keys()))
+            if metric_to_view:
+                hist_values = valid_metrics[metric_to_view]
+                # Create simple line chart of historical data
+                df_hist = pd.DataFrame(list(hist_values.items()), columns=['Year', 'Value']).sort_values('Year')
+                
+                fig = px.line(df_hist, x='Year', y='Value', 
+                             title=f"Historical Trend: {metric_to_view}",
+                             markers=True)
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("No metrics with sufficient historical data (>= 2 years) for trend analysis.")
 
 # =============================================
 # 🏗️ SAMPLE DATA FUNCTIONS
@@ -1428,7 +1409,9 @@ def main():
         show_kpis = st.checkbox("Show Overview", True)
         show_ifrs17_details = st.checkbox("Show IFRS 17 Details", True, help="Display IFRS 17 specifics.") if _current_data_type == "insurance" else False
         show_segments = st.checkbox("Show Segment Performance", True, help="Shows bar chart comparison. Map only for specific types.")
-        show_ai_insights = st.checkbox("Show AI Insights", True); show_forecasting = st.checkbox("Show Forecasting", True)
+        show_ai_insights = st.checkbox("Show AI Insights", True)
+        show_forecasting = st.checkbox("Show Forecasting", False, help="Forecasting requires Prophet package")  # Changed to False by default
+        
         st.divider(); st.header("🚀 Future Capabilities"); st.caption("Planned enhancements:")
         st.text_input("Ask the AI (NLQ)", placeholder="e.g., What drove CSM change?", disabled=True)
         st.selectbox("Scenario Analysis", ["Base Case", "Interest Rate +1%"], disabled=True)
